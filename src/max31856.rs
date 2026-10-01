@@ -2,11 +2,13 @@ use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::mode::Blocking;
 use embassy_stm32::spi::{self, Spi, mode::Master};
 
+#[allow(dead_code)]
 pub struct Max31856<'a> {
     spi: Spi<'a, Blocking, Master>,
     cs: [Output<'a>; 2],
 }
 
+#[allow(dead_code)]
 impl<'a> Max31856<'a> {
     pub fn new(
         spi: Spi<'a, Blocking, Master>,

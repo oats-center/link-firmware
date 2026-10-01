@@ -154,8 +154,14 @@ pub fn parse_cmd<'a>(cmd: &'a str) -> Result<SerialCommand<'a>, Sdi12Error> {
                 None => ("", ""),
             };
 
-            let start_addr: char = start.chars().next().unwrap_or(' ');
-            let end_addr: char = end.chars().next().unwrap_or(' ');
+            let start_addr: char = match start.chars().next() {
+                Some(x) => x,
+                None    => ' ',
+            };
+            let end_addr: char = match end.chars().next() {
+                Some(x) => x,
+                None    => ' ', 
+            };
             Ok(SerialCommand::Scan {
                 start_addr,
                 end_addr,
@@ -177,7 +183,6 @@ async fn handle_error(tx: &mut BufferedUartTx<'_>, error: Sdi12Error) -> Result<
         Sdi12Error::InvalidSDI12Command => tx.write(b"Invalid SDI12 Command\r\n").await,
         Sdi12Error::InvalidSerialCommand => tx.write(b"Invalid Serial Command\r\n").await,
         Sdi12Error::InvalidResponse => tx.write(b"Invalid SDI12 Response\r\n").await,
-        Sdi12Error::SpiError => tx.write(b"TC SPI Error\r\n").await,
         Sdi12Error::UartError => tx.write(b"Uart Error\r\n").await,
     }
 }

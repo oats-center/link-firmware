@@ -6,9 +6,9 @@ use embassy_stm32::peripherals::{DMA1_CH4, DMA1_CH5, PA9, USART1};
 use embassy_stm32::usart::{self, Config, Uart};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 
-use crate::Irqs;
+use crate::config::Irqs;
 
-#[derive(Debug, PartialEq)]
+#[derive(defmt::Format, PartialEq)]
 pub enum SerialCommand<'a> {
     Ping,
     Scan { start_addr: char, end_addr: char },
@@ -16,13 +16,13 @@ pub enum SerialCommand<'a> {
     Help,
 }
 
-#[derive(Debug, PartialEq, defmt::Format)]
+#[derive(defmt::Format, PartialEq)]
+#[allow(dead_code)]
 pub enum Sdi12Error {
     Timeout,
     InvalidSDI12Command,
     InvalidSerialCommand,
     InvalidResponse,
-    SpiError,
     UartError,
 }
 
@@ -189,6 +189,7 @@ impl<'a> Sdi12Bus for Sdi12Bitbang<'a> {
     }
 }
 
+/*
 pub struct Sdi12Uart<'a> {
     uart: Peri<'a, USART1>,
     pin: Peri<'a, PA9>,
@@ -291,3 +292,5 @@ impl<'a> Sdi12Bus for Sdi12Uart<'a> {
         Self::receive_response(&mut uart_hd, rx_buf).await
     }
 }
+
+*/

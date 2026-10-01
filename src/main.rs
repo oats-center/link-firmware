@@ -40,13 +40,6 @@ type W5500Runner = WiznetRunner<
 >;
 
 // interrupts for serial bus
-bind_interrupts!(pub struct Irqs {
-    USART1 => usart::InterruptHandler<peripherals::USART1>;
-    USART2 => usart::InterruptHandler<peripherals::USART2>;
-    DMA1_CHANNEL2_3 => dma::InterruptHandler<peripherals::DMA1_CH2>, dma::InterruptHandler<peripherals::DMA1_CH3>;
-    DMA1_CH4_5_DMAMUX1_OVR => dma::InterruptHandler<peripherals::DMA1_CH4>, dma::InterruptHandler<peripherals::DMA1_CH5>;
-    EXTI4_15 => exti::InterruptHandler<embassy_stm32::interrupt::typelevel::EXTI4_15>;
-});
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -54,22 +47,23 @@ async fn main(spawner: Spawner) {
     let mut link = Link::new(p);
 
     link.watchdog.unleash();
-    spawner.spawn(feed_watchdog(link.watchdog).unwrap());
+    spawner.spawn(defmt::unwrap!(feed_watchdog(link.watchdog)));
 
     // Combine SPI and CS into a SpiDevice
-    let spi_device = ExclusiveDevice::new(link.spi2, link.w5500_nss, embassy_time::Delay).unwrap();
+    let spi_device = defmt::unwrap!(ExclusiveDevice::new(link.spi2, link.w5500_nss, embassy_time::Delay));
 
     // Initialize the Wiznet driver
     let mac_addr = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
-    let (w5500_device, w5500_runner) = embassy_net_wiznet::new(
+    let (w5500_device, w5500_runner) = match embassy_net_wiznet::new(
         mac_addr,
         WIZNET_STATE.init(WiznetState::new()),
         spi_device,
         link.w5500_intn,
         link.w5500_nrst,
-    )
-    .await
-    .unwrap();
+    ) .await {
+        Ok(result) => result,
+        _ => defmt::panic!("Wiznet initialization"),
+    };
 
     // Initialize the Embassy network stack
     let net_config = embassy_net::Config::dhcpv4(Default::default());
@@ -78,8 +72,8 @@ async fn main(spawner: Spawner) {
     let (stack, net_runner) = embassy_net::new(w5500_device, net_config, resources, seed);
     let _ = stack;
 
-    spawner.spawn(w5500_task(w5500_runner).unwrap());
-    spawner.spawn(net_task(net_runner).unwrap());
+    spawner.spawn(defmt::unwrap!(w5500_task(w5500_runner)));
+    spawner.spawn(defmt::unwrap!(net_task(net_runner)));
 
     Timer::after_millis(250).await;
 

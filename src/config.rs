@@ -26,6 +26,7 @@ static RX_BUF: StaticCell<[u8; 128]> = StaticCell::new();
 #[allow(dead_code)]
 pub struct Link {
     pub spi1: Spi<'static, Async, Master>,
+    pub adc_nss: Output<'static>,
     pub adc_drdy: Input<'static>,
     pub adc_nrst: Output<'static>,
 
@@ -57,7 +58,10 @@ impl Link {
             Irqs,
             spi1_config,
         );
-        let adc_drdy = Input::new(p.PC6, Pull::Up);
+
+        let adc_nss  = Output::new(p.PA15, Level::High, Speed::High);
+        // adc_drdy will be PC6 on the actual board, dev board doesn't break out PCs
+        let adc_drdy = Input::new(p.PA6, Pull::Up);
         let adc_nrst = Output::new(p.PA10, Level::High, Speed::High);
 
         // W5500 init
@@ -81,7 +85,7 @@ impl Link {
         let tx_buf_ref = TX_BUF.init([0; 128]);
         let rx_buf_ref = RX_BUF.init([0; 128]);
 
-        let serial = BufferedUart::new(
+        let serial = defmt::unwrap!(BufferedUart::new(
             p.USART2,
             p.PA3,
             p.PA2,
@@ -89,8 +93,7 @@ impl Link {
             rx_buf_ref,
             Irqs,
             usart::Config::default(),
-        )
-        .unwrap();
+        ));
 
         // TODO: update when on Link instead of NUCLEO
         let sdi12 = Sdi12Bitbang::new(p.PA1.into());
@@ -100,6 +103,7 @@ impl Link {
 
         Link {
             spi1,
+            adc_nss,
             adc_drdy,
             adc_nrst,
             spi2,
