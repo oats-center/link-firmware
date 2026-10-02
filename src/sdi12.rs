@@ -1,40 +1,34 @@
 use defmt::{debug, warn};
 use embassy_hal_internal::Peri;
-use embassy_stm32::gpio::{Level, Output, Flex, Pull, Speed, AnyPin};
+use embassy_stm32::gpio::{AnyPin, Flex, Level, Output, Pull, Speed};
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{USART1, PA9, DMA1_CH4, DMA1_CH5};
+use embassy_stm32::peripherals::{DMA1_CH4, DMA1_CH5, PA9, USART1};
 use embassy_stm32::usart::{self, Config, Uart};
-use embassy_time::{Timer, Duration, Instant, with_timeout};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 
-use crate::Irqs;
+use crate::config::Irqs;
 
-#[derive(Debug, PartialEq)]
+#[derive(defmt::Format, PartialEq)]
 pub enum SerialCommand<'a> {
     Ping,
     Scan { start_addr: char, end_addr: char },
     Raw { sdi12_cmd: &'a str },
-    Tc { channel: usize },
     Help,
 }
 
-#[derive(Debug, PartialEq, defmt::Format)]
+#[derive(defmt::Format, PartialEq)]
+#[allow(dead_code)]
 pub enum Sdi12Error {
     Timeout,
     InvalidSDI12Command,
     InvalidSerialCommand,
     InvalidResponse,
-    SpiError,
     UartError,
 }
 
 pub trait Sdi12Bus {
-    async fn query_device(
-        &mut self,
-        cmd: &[u8],
-        rx_buf: &mut [u8],
-    ) -> Result<usize, Sdi12Error>;
+    async fn query_device(&mut self, cmd: &[u8], rx_buf: &mut [u8]) -> Result<usize, Sdi12Error>;
 }
-
 
 pub struct Sdi12Bitbang<'a> {
     pin: Flex<'a>,
@@ -164,17 +158,10 @@ impl<'a> Sdi12Bitbang<'a> {
             timeout = Duration::from_millis(15);
         }
     }
-
 }
 
-impl<'a> Sdi12Bus  for Sdi12Bitbang<'a>  {
-    
-
-    async fn query_device(
-        &mut self,
-        cmd: &[u8],
-        rx_buf: &mut [u8],
-    ) -> Result<usize, Sdi12Error> {
+impl<'a> Sdi12Bus for Sdi12Bitbang<'a> {
+    async fn query_device(&mut self, cmd: &[u8], rx_buf: &mut [u8]) -> Result<usize, Sdi12Error> {
         debug!("SDI-12 transaction start: command={=[u8]}", cmd);
 
         self.pin.set_high();
@@ -200,10 +187,9 @@ impl<'a> Sdi12Bus  for Sdi12Bitbang<'a>  {
         }
         result
     }
-
-    
 }
 
+/*
 pub struct Sdi12Uart<'a> {
     uart: Peri<'a, USART1>,
     pin: Peri<'a, PA9>,
@@ -265,17 +251,10 @@ impl<'a> Sdi12Uart<'a> {
             };
         }
     }
-
 }
 
 impl<'a> Sdi12Bus for Sdi12Uart<'a> {
-    
-
-    async fn query_device(
-        &mut self,
-        cmd: &[u8],
-        rx_buf: &mut [u8],
-    ) -> Result<usize, Sdi12Error> {
+    async fn query_device(&mut self, cmd: &[u8], rx_buf: &mut [u8]) -> Result<usize, Sdi12Error> {
         {
             let mut break_pin = Output::new(self.pin.reborrow(), Level::High, Speed::Low);
 
@@ -305,12 +284,13 @@ impl<'a> Sdi12Bus for Sdi12Uart<'a> {
         )
         .map_err(|_| Sdi12Error::UartError)?;
 
-        uart_hd.write(cmd)
-        .await
-        .map_err(|_| Sdi12Error::UartError)?;
-        
+        uart_hd
+            .write(cmd)
+            .await
+            .map_err(|_| Sdi12Error::UartError)?;
+
         Self::receive_response(&mut uart_hd, rx_buf).await
     }
-
-    
 }
+
+*/

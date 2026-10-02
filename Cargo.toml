@@ -21,9 +21,14 @@ embassy-net = { version = "0.6.0", features = ["defmt", "tcp", "dhcpv4", "medium
 embassy-net-wiznet = { version = "0.3.0", features = ["defmt"] }
 embedded-hal-bus = { version = "0.2.0", features = ["async"] }
 static_cell = "2.1"
+embassy-embedded-hal = "0.6.0"
+embedded-io-async = "0.7.0"
 
 [profile.release]
-debug = 2
+codegen-units = 1 
+debug = 2         
+lto = true        
+opt-level = 'z'   
 
 [[bin]]
 name = "link-firmware"
