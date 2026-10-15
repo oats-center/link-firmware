@@ -1,6 +1,6 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 
-runner = "probe-rs run --chip STM32G031K8"
+runner = "probe-rs run --chip STM32G0B1RE"
 
 [build]
 target = "thumbv6m-none-eabi"

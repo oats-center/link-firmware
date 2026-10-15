@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-embassy-stm32 = { version = "0.6.0", features = [ "defmt", "time-driver-any", "stm32g031k8", "memory-x", "unstable-pac", "exti"]  }
+embassy-stm32 = { version = "0.6.0", features = [ "defmt", "time-driver-any", "stm32g0b1re", "memory-x", "unstable-pac", "exti"]  }
 embassy-executor = { version = "0.10.0", features = ["platform-cortex-m", "executor-thread", "defmt"] }
 embassy-time = { version = "0.5.1", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
 
@@ -23,6 +23,8 @@ embedded-hal-bus = { version = "0.2.0", features = ["async"] }
 static_cell = "2.1"
 embassy-embedded-hal = "0.6.0"
 embedded-io-async = "0.7.0"
+embassy-sync = "0.8.0"
+embedded-hal-async = "1.0.0"
 
 [profile.release]
 codegen-units = 1 

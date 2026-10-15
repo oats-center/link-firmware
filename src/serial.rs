@@ -1,6 +1,9 @@
-use embassy_stm32::usart::{BufferedUart, BufferedUartRx, BufferedUartTx, Error};
-use embedded_io_async::{Read, Write};
+use core::fmt::{self, Write};
 
+use embassy_stm32::mode::Async;
+use embassy_stm32::usart::{Error, Uart, UartTx};
+
+use crate::max31856::Max31856;
 use crate::sdi12::{self, Sdi12Bus};
 use sdi12::{Sdi12Error, SerialCommand};
 
@@ -9,18 +12,19 @@ use sdi12::{Sdi12Error, SerialCommand};
 
 // TODO: add function comments
 pub async fn receive(
-    usart: &mut BufferedUart<'_>,
+    usart: &mut Uart<'_, Async>,
     sdi12: &mut impl Sdi12Bus,
-) -> Result<usize, Error> {
+    thermocouples: &mut Max31856<'_>,
+) -> Result<(), Error> {
     let mut rx_buf = [0u8; 64];
     let mut tx_buf = [0u8; 256];
 
-    let (mut usart_tx, mut usart_rx) = usart.split_ref();
+    let (mut usart_tx, usart_rx) = usart.split_ref();
 
-    let bytes_read = read_until_delimiter(&mut usart_rx, &mut rx_buf, b'\n').await?;
+    let bytes_read = usart_rx.read_until_idle(&mut rx_buf).await?;
 
-    if let Ok(cmd_str) = core::str::from_utf8(&rx_buf[..(bytes_read - 1)]) {
-        match get_response(sdi12, cmd_str, &mut tx_buf).await {
+    if let Ok(cmd_str) = core::str::from_utf8(&rx_buf[..bytes_read]) {
+        match get_response(sdi12, thermocouples, cmd_str, &mut tx_buf).await {
             Ok(size) if size > 0 => usart_tx.write(&tx_buf[..size]).await,
             Ok(_) => handle_error(&mut usart_tx, Sdi12Error::InvalidSDI12Command).await,
             Err(e) => handle_error(&mut usart_tx, e).await,
@@ -30,34 +34,9 @@ pub async fn receive(
     }
 }
 
-pub async fn read_until_delimiter(
-    serial: &mut BufferedUartRx<'_>,
-    buf: &mut [u8],
-    delimiter: u8,
-) -> Result<usize, Error> {
-    let mut index = 0;
-
-    while index < buf.len() {
-        let mut byte = [0u8; 1];
-
-        match serial.read(&mut byte).await {
-            Ok(_) => {
-                buf[index] = byte[0];
-                index += 1;
-
-                if byte[0] == delimiter {
-                    return Ok(index);
-                }
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    Ok(index)
-}
-
 pub async fn get_response(
     sdi12: &mut impl Sdi12Bus,
+    thermocouples: &mut Max31856<'_>,
     cmd_str: &str,
     output: &mut [u8],
 ) -> Result<usize, Sdi12Error> {
@@ -121,6 +100,30 @@ pub async fn get_response(
             msg.len()
         }
 
+        SerialCommand::Tc => {
+            let (temperature, fault) = thermocouples
+                .read_temperature()
+                .await
+                .map_err(|_| Sdi12Error::SpiError)?;
+            let mut writer = Buffer::new(output);
+            if fault == 0 {
+                let negative = temperature < 0;
+                let magnitude = i64::from(temperature).abs();
+                let whole = magnitude / 128;
+                let fraction = (magnitude % 128) * 10_000 / 128;
+                write!(
+                    writer,
+                    "{}{whole}.{fraction:04}\r\n",
+                    if negative { "-" } else { "" }
+                )
+                .map_err(|_| Sdi12Error::InvalidResponse)?;
+            } else {
+                write!(writer, "TC Fault 0x{fault:02X}\r\n")
+                    .map_err(|_| Sdi12Error::InvalidResponse)?;
+            }
+            writer.len
+        }
+
         // TODO: implement a more useful help
         SerialCommand::Help => {
             let msg = b"COMMANDS: PING, SCAN <START>,<END>, RAW <SDI_CMD>, TC <0|1>\r\n";
@@ -147,21 +150,14 @@ pub fn parse_cmd<'a>(cmd: &'a str) -> Result<SerialCommand<'a>, Sdi12Error> {
     match instruction {
         "PING" => Ok(SerialCommand::Ping),
 
-        // TODO: fix invalid sdi12 command return
         "SCAN" => {
             let (start, end) = match args.split_once(',') {
                 Some((s, e)) => (s.trim(), e.trim()),
                 None => ("", ""),
             };
 
-            let start_addr: char = match start.chars().next() {
-                Some(x) => x,
-                None    => ' ',
-            };
-            let end_addr: char = match end.chars().next() {
-                Some(x) => x,
-                None    => ' ', 
-            };
+            let start_addr: char = start.chars().next().unwrap_or(' ');
+            let end_addr: char = end.chars().next().unwrap_or(' ');
             Ok(SerialCommand::Scan {
                 start_addr,
                 end_addr,
@@ -170,6 +166,8 @@ pub fn parse_cmd<'a>(cmd: &'a str) -> Result<SerialCommand<'a>, Sdi12Error> {
 
         "RAW" => Ok(SerialCommand::Raw { sdi12_cmd: args }),
 
+        "TC" => Ok(SerialCommand::Tc),
+
         "HELP" => Ok(SerialCommand::Help),
 
         _ => Err(Sdi12Error::InvalidSerialCommand),
@@ -177,12 +175,34 @@ pub fn parse_cmd<'a>(cmd: &'a str) -> Result<SerialCommand<'a>, Sdi12Error> {
 }
 
 // TODO: more useful error returns
-async fn handle_error(tx: &mut BufferedUartTx<'_>, error: Sdi12Error) -> Result<usize, Error> {
+async fn handle_error(tx: &mut UartTx<'_, Async>, error: Sdi12Error) -> Result<(), Error> {
     match error {
         Sdi12Error::Timeout => tx.write(b"SDI12 Timeout\r\n").await,
         Sdi12Error::InvalidSDI12Command => tx.write(b"Invalid SDI12 Command\r\n").await,
         Sdi12Error::InvalidSerialCommand => tx.write(b"Invalid Serial Command\r\n").await,
         Sdi12Error::InvalidResponse => tx.write(b"Invalid SDI12 Response\r\n").await,
+        Sdi12Error::SpiError => tx.write(b"TC SPI Error\r\n").await,
         Sdi12Error::UartError => tx.write(b"Uart Error\r\n").await,
+    }
+}
+
+struct Buffer<'a> {
+    bytes: &'a mut [u8],
+    len: usize,
+}
+
+impl<'a> Buffer<'a> {
+    fn new(bytes: &'a mut [u8]) -> Self {
+        Self { bytes, len: 0 }
+    }
+}
+
+impl Write for Buffer<'_> {
+    fn write_str(&mut self, value: &str) -> fmt::Result {
+        let end = self.len + value.len();
+        let destination = self.bytes.get_mut(self.len..end).ok_or(fmt::Error)?;
+        destination.copy_from_slice(value.as_bytes());
+        self.len = end;
+        Ok(())
     }
 }

@@ -1,41 +1,37 @@
-use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::mode::Blocking;
-use embassy_stm32::spi::{self, Spi, mode::Master};
+use core::convert::Infallible;
+
+use embassy_embedded_hal::shared_bus::SpiDeviceError;
+use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
+use embassy_stm32::gpio::Output;
+use embassy_stm32::mode::Async;
+use embassy_stm32::spi::{Spi, mode::Master};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embedded_hal_async::spi::SpiDevice as _;
 
 #[allow(dead_code)]
 pub struct Max31856<'a> {
-    spi: Spi<'a, Blocking, Master>,
-    cs: [Output<'a>; 2],
+    spi_device: SpiDevice<'a, CriticalSectionRawMutex, Spi<'a, Async, Master>, Output<'a>>,
 }
 
 #[allow(dead_code)]
 impl<'a> Max31856<'a> {
-    pub fn new(
-        spi: Spi<'a, Blocking, Master>,
-        cs0: embassy_hal_internal::Peri<'a, embassy_stm32::peripherals::PA4>,
-        cs1: embassy_hal_internal::Peri<'a, embassy_stm32::peripherals::PA5>,
-    ) -> Result<Self, spi::Error> {
-        let mut device = Self {
-            spi,
-            cs: [
-                Output::new(cs0, Level::High, Speed::Low),
-                Output::new(cs1, Level::High, Speed::Low),
-            ],
-        };
+    pub async fn new(
+        spi_device: SpiDevice<'a, CriticalSectionRawMutex, Spi<'a, Async, Master>, Output<'a>>,
+    ) -> Result<Self, SpiDeviceError<embassy_stm32::spi::Error, Infallible>> {
+        let mut device = Self { spi_device };
 
-        for channel in 0..2 {
-            device.write_register(channel, 0x00, 0x90)?; // continuous conversion, open-circuit detection, 60 Hz
-            device.write_register(channel, 0x01, 0x03)?; // K-type thermocouple
-        }
+        device.write_register(0x00, 0x90).await?; // continuous conversion, open-circuit detection, 60 Hz
+        device.write_register(0x01, 0x03).await?; // K-type thermocouple
 
         Ok(device)
     }
 
-    pub fn read_temperature(&mut self, channel: usize) -> Result<(i32, u8), spi::Error> {
+    pub async fn read_temperature(
+        &mut self,
+    ) -> Result<(i32, u8), SpiDeviceError<embassy_stm32::spi::Error, Infallible>> {
         let mut data = [0x0c, 0, 0, 0, 0];
-        self.cs[channel].set_low();
-        let result = self.spi.blocking_transfer_in_place(&mut data);
-        self.cs[channel].set_high();
+
+        let result = self.spi_device.transfer_in_place(&mut data).await;
         result?;
 
         let value = i32::from_be_bytes([
@@ -47,15 +43,12 @@ impl<'a> Max31856<'a> {
         Ok((value, data[4]))
     }
 
-    fn write_register(
+    async fn write_register(
         &mut self,
-        channel: usize,
         register: u8,
         value: u8,
-    ) -> Result<(), spi::Error> {
-        self.cs[channel].set_low();
-        let result = self.spi.blocking_write(&[register | 0x80, value]);
-        self.cs[channel].set_high();
+    ) -> Result<(), SpiDeviceError<embassy_stm32::spi::Error, Infallible>> {
+        let result = self.spi_device.write(&[register | 0x8, value]).await;
         result
     }
 }
