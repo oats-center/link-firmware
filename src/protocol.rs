@@ -16,6 +16,24 @@ pub const MAX_PAYLOAD_LEN: usize = 1024;
 // Fixed payload for the first HELLO demonstration. This is NOT the final device capabilities/configuration schema
 pub const HELLO_PAYLOAD: &[u8] = b"link-firmware:avdq-v1";
 
+use crate::sample_block::{
+    SampleBlock, CHANNEL_COUNT, RAW_SAMPLE_BYTES, SAMPLE_RATE_HZ, SCANS_PER_BLOCK,
+};
+
+// Data payload (all integers little-endian) appended after 16-byte AVDQ header:
+//  0: u64 first_scan_index
+//  8: u32 sample_rate_hz (2000)
+// 12: u16 scan_count (100)
+// 14: u8  channel_count (2)
+// 15: u8  sample_encoding (1 = signed i32 ADC counts, little endian)
+// 16: u32 cumulative dropped 100-scan blocks since START
+// 20: u32 source_flags (bit 0 = synthesized data)
+// 24: 100 x [i32 channel_0, i32 channel_1] = 800 bytes
+pub const DATA_METADATA_LEN: usize = 24;
+pub const DATA_PAYLOAD_LEN: usize = DATA_METADATA_LEN + RAW_SAMPLE_BYTES;
+pub const DATA_ENCODING_I32: u8 = 1;
+pub const DATA_SOURCE_SYNTHETIC: u32 = 1;
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageType {
@@ -123,6 +141,30 @@ impl FrameHeader {
     }
 }
 
+// Construct a complete, fixed-length DATA payload. This is pure Rust and
+// does not require a heap, SPI, an ADC, or a TCP socket
+pub fn encode_data_payload(
+    block: &SampleBlock,
+    dropped_blocks: u32,
+    output: &mut [u8; DATA_PAYLOAD_LEN],
+) {
+    output[..8].copy_from_slice(&block.first_scan_index.to_le_bytes());
+    output[8..12].copy_from_slice(&SAMPLE_RATE_HZ.to_le_bytes());
+    output[12..14].copy_from_slice(&(SCANS_PER_BLOCK as u16).to_le_bytes());
+    output[14] = CHANNEL_COUNT as u8;
+    output[15] = DATA_ENCODING_I32;
+    output[16..20].copy_from_slice(&dropped_blocks.to_le_bytes());
+    output[20..24].copy_from_slice(&DATA_SOURCE_SYNTHETIC.to_le_bytes());
+
+    let mut offset = DATA_METADATA_LEN;
+    for scan in block.samples.iter() {
+        for count in scan.iter() {
+            output[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
+            offset += 4;
+        }
+    }
+}
+
 // Encode an entire AVDQ frame into caller-supplied memory (no heap)
 pub fn encode_frame(
     message_type: MessageType,
@@ -143,6 +185,28 @@ pub fn encode_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sample_block::{synthetic_block, synthetic_scan};
+
+    #[test]
+    fn fixed_data_frame_layout_and_sample_order() {
+        assert!(DATA_PAYLOAD_LEN <= MAX_PAYLOAD_LEN);
+        assert_eq!(DATA_PAYLOAD_LEN, 824);
+        let block = synthetic_block(300);
+        let mut payload = [0u8; DATA_PAYLOAD_LEN];
+        encode_data_payload(&block, 7, &mut payload);
+        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 300);
+        assert_eq!(u32::from_le_bytes(payload[8..12].try_into().unwrap()), 2_000);
+        assert_eq!(u16::from_le_bytes(payload[12..14].try_into().unwrap()), 100);
+        assert_eq!(payload[14], 2);
+        assert_eq!(payload[15], DATA_ENCODING_I32);
+        assert_eq!(u32::from_le_bytes(payload[16..20].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(payload[20..24].try_into().unwrap()), 1);
+        let c0 = i32::from_le_bytes(payload[24..28].try_into().unwrap());
+        let c1 = i32::from_le_bytes(payload[28..32].try_into().unwrap());
+        assert_eq!([c0, c1], synthetic_scan(300));
+        let last = DATA_METADATA_LEN + 99 * 8;
+        assert_eq!(i32::from_le_bytes(payload[last..last+4].try_into().unwrap()), synthetic_scan(399)[0]);
+    }
 
     #[test]
     fn header_wire_bytes_are_little_endian() {

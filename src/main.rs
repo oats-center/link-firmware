@@ -20,6 +20,9 @@ mod serial;
 mod ethernet;
 mod protocol;
 mod tcp_server;
+mod acquisition;
+mod sample_block;
+mod simulator;
 
 use crate::config::Link;
 
@@ -33,6 +36,8 @@ async fn main(spawner: Spawner) {
     spawner.spawn(feed_watchdog(link.watchdog).unwrap());
 
     info!("Starting Program...");
+
+    spawner.spawn(simulator::simulator_task().unwrap());
 
     ethernet::start(
         spawner,

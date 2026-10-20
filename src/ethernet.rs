@@ -1,9 +1,9 @@
-use defmt::{info, warn};
+use defmt::info;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_net::{
-    tcp::TcpSocket, Config, Ipv4Address, Ipv4Cidr, Runner as NetRunner,
-    Stack, StackResources, StaticConfigV4,
+    Config, Ipv4Address, Ipv4Cidr, Runner as NetRunner,
+    StackResources, StaticConfigV4,
 };
 use embassy_net_wiznet::{
     chip::W5500, Device as WiznetDevice, Runner as WiznetRunner, State as WiznetState,
