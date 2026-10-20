@@ -1,92 +1,58 @@
 #![no_std]
 #![no_main]
 
+// Remove this after testing
+#![allow(dead_code)]
+
 use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::peripherals;
 use embassy_time::Timer;
-
-use embassy_net::{Runner as NetRunner, StackResources};
-use embassy_net_wiznet::{Device, Runner as WiznetRunner, State as WiznetState};
-use embedded_hal_bus::spi::ExclusiveDevice;
-use static_cell::StaticCell;
-
 use panic_probe as _;
 
-use crate::config::Link;
-
 mod config;
+mod ads131m;
 mod max31856;
 mod sdi12;
 mod serial;
+mod ethernet;
+mod protocol;
+mod tcp_server;
 
-// static WIZNET_STATE: StaticCell<WiznetState<1, 1>> = StaticCell::new(); // Might need to increase size of packet queues so a new packet can be received while processing an old one, but watch out for RAM usage
-// static NET_RESOURCES: StaticCell<StackResources<2>> = StaticCell::new();
-
-// type W5500SpiBus =
-// embassy_stm32::spi::Spi<'static, embassy_stm32::mode::Async, embassy_stm32::spi::mode::Master>;
-// type W5500CsPin = embassy_stm32::gpio::Output<'static>;
-// type W5500IntPin = embassy_stm32::exti::ExtiInput<'static, embassy_stm32::mode::Async>;
-// type W5500RstPin = embassy_stm32::gpio::Output<'static>;
-// type W5500SpiDevice = ExclusiveDevice<W5500SpiBus, W5500CsPin, embassy_time::Delay>;
-// type W5500Runner = WiznetRunner<
-// 'static,
-// embassy_net_wiznet::chip::W5500,
-// W5500SpiDevice,
-// W5500IntPin,
-// W5500RstPin,
-// >;
+use crate::config::Link;
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
     let p = embassy_stm32::init(Default::default());
-    let mut link = Link::new(p);
+    let mut link = Link::new(p).await;
 
+    // TODO: Feed watchdog only when critical tasks are making progress
     link.watchdog.unleash();
-    spawner.spawn(defmt::unwrap!(feed_watchdog(link.watchdog)));
-
-    // Combine SPI and CS into a SpiDevice
-    let spi_device = defmt::unwrap!(ExclusiveDevice::new(link.spi2, link.w5500_nss, embassy_time::Delay));
-
-    // // Initialize the Wiznet driver
-    // let mac_addr = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
-    // let (w5500_device, w5500_runner) = match embassy_net_wiznet::new(
-    //     mac_addr,
-    //     WIZNET_STATE.init(WiznetState::new()),
-    //     spi_device,
-    //     link.w5500_intn,
-    //     link.w5500_nrst,
-    // ) .await {
-    //     Ok(result) => result,
-    //     _ => defmt::panic!("Wiznet initialization"),
-    // };
-
-    // // Initialize the Embassy network stack
-    // let net_config = embassy_net::Config::dhcpv4(Default::default());
-    // let seed = 1234;
-    // let resources = NET_RESOURCES.init(StackResources::new());
-    // let (stack, net_runner) = embassy_net::new(w5500_device, net_config, resources, seed);
-    // let _ = stack;
-
-    // spawner.spawn(defmt::unwrap!(w5500_task(w5500_runner)));
-    // spawner.spawn(defmt::unwrap!(net_task(net_runner)));
-
-    Timer::after_millis(250).await;
+    spawner.spawn(feed_watchdog(link.watchdog).unwrap());
 
     info!("Starting Program...");
 
+    ethernet::start(
+        spawner,
+        link.eth_device,
+        link.w5500_intn,
+        link.w5500_nrst,
+    )
+    .await;
+
+    // link.adc.reset().await;
+
     loop {
-        info!("Reading!");
-        match serial::receive(&mut link.serial, &mut link.sdi12).await {
-            Ok(_) => {
-                info!("Received Command",);
-            }
-            Err(e) => {
-                warn!("Error, {:?}", e);
-            }
-        }
+        // let _ = match link.adc.read_channels().await {
+        //     Ok(r) => { 
+        //         info!("Ch1: {=i32:#08x} | Ch2: {=i32:#08x} | Ch3: {=i32:#08x} | Ch4: {=i32:#08x} ", r[0], r[1], r[2], r[3]); 
+        //     },
+        //     Err(e) => { info!("Error: {:?}", e); },
+        // };
+
+        Timer::after_millis(500).await;
     }
 }
 
@@ -97,15 +63,3 @@ async fn feed_watchdog(mut watchdog: IndependentWatchdog<'static, peripherals::I
         Timer::after_secs(5).await;
     }
 }
-
-// // Background Task for the W5500 hardware driver
-// #[embassy_executor::task]
-// async fn w5500_task(runner: W5500Runner) -> ! {
-//     runner.run().await
-// }
-
-// // Background Task for the Embassy TCP/IP stack
-// #[embassy_executor::task]
-// async fn net_task(mut runner: NetRunner<'static, Device<'static>>) -> ! {
-//     runner.run().await
-// }

@@ -1,0 +1,10 @@
+[package]
+name = "avdq-protocol-tests"
+version = "0.1.0"
+edition = "2024"
+
+# Re-use exactly the same protocol.rs as the microcontroller project.
+[lib]
+path = "../src/protocol.rs"
+
+[workspace]

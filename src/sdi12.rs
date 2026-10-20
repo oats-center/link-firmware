@@ -2,7 +2,7 @@ use defmt::{debug, warn};
 use embassy_hal_internal::Peri;
 use embassy_stm32::gpio::{AnyPin, Flex, Level, Output, Pull, Speed};
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{DMA1_CH4, DMA1_CH5, PA9, USART1};
+use embassy_stm32::peripherals::{DMA2_CH1, DMA2_CH2, PB2, USART3};
 use embassy_stm32::usart::{self, Config, Uart};
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 
@@ -13,6 +13,8 @@ pub enum SerialCommand<'a> {
     Ping,
     Scan { start_addr: char, end_addr: char },
     Raw { sdi12_cmd: &'a str },
+    Tc,
+    Adc,
     Help,
 }
 
@@ -24,16 +26,19 @@ pub enum Sdi12Error {
     InvalidSerialCommand,
     InvalidResponse,
     UartError,
+    SpiError,
 }
 
 pub trait Sdi12Bus {
     async fn query_device(&mut self, cmd: &[u8], rx_buf: &mut [u8]) -> Result<usize, Sdi12Error>;
 }
 
+#[allow(dead_code)]
 pub struct Sdi12Bitbang<'a> {
     pin: Flex<'a>,
 }
 
+#[allow(dead_code)]
 impl<'a> Sdi12Bitbang<'a> {
     const BIT_US: u64 = 833;
 
@@ -189,21 +194,20 @@ impl<'a> Sdi12Bus for Sdi12Bitbang<'a> {
     }
 }
 
-/*
 pub struct Sdi12Uart<'a> {
-    uart: Peri<'a, USART1>,
-    pin: Peri<'a, PA9>,
-    tx_dma: Peri<'a, DMA1_CH4>,
-    rx_dma: Peri<'a, DMA1_CH5>,
+    uart: Peri<'a, USART3>,
+    pin: Peri<'a, PB2>,
+    tx_dma: Peri<'a, DMA2_CH1>,
+    rx_dma: Peri<'a, DMA2_CH2>,
     irqs: Irqs,
 }
 
 impl<'a> Sdi12Uart<'a> {
     pub fn new(
-        pin: Peri<'a, PA9>,
-        uart: Peri<'a, USART1>,
-        tx_dma: Peri<'a, DMA1_CH4>,
-        rx_dma: Peri<'a, DMA1_CH5>,
+        pin: Peri<'a, PB2>,
+        uart: Peri<'a, USART3>,
+        tx_dma: Peri<'a, DMA2_CH1>,
+        rx_dma: Peri<'a, DMA2_CH2>,
         irqs: Irqs,
     ) -> Self {
         Sdi12Uart {
@@ -292,5 +296,3 @@ impl<'a> Sdi12Bus for Sdi12Uart<'a> {
         Self::receive_response(&mut uart_hd, rx_buf).await
     }
 }
-
-*/
