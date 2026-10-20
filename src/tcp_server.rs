@@ -17,7 +17,7 @@ const INPUT_CHUNK_BYTES: usize = 256;
 const ERROR_NOT_IMPLEMENTED: &[u8] = b"NOT_IMPLEMENTED";
 const ERROR_INVALID_COMMAND: &[u8] = b"INVALID_COMMAND";
 const ERROR_ALREADY_STREAMING: &[u8] = b"ALREADY_STREAMING";
-const SIM_STARTED: &[u8] = b"SIM_STARTED"; // temporary milestone-4 ACK
+const SIM_STARTED: &[u8] = b"SIM_STARTED"; // temporary ACK for simulation test
 
 // One listener and one active host connection at a time
 #[embassy_executor::task]
