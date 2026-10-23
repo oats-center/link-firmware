@@ -11,13 +11,13 @@
 pub const MAGIC: [u8; 4] = *b"AVDQ";
 pub const VERSION: u8 = 1;
 pub const HEADER_LEN: usize = 16;
-pub const MAX_PAYLOAD_LEN: usize = 1024;
+pub const MAX_PAYLOAD_LEN: usize = 1536;
 
 // Fixed payload for the first HELLO demonstration. This is NOT the final device capabilities/configuration schema
 pub const HELLO_PAYLOAD: &[u8] = b"link-firmware:avdq-v1";
 
 use crate::sample_block::{
-    SampleBlock, CHANNEL_COUNT, RAW_SAMPLE_BYTES, SAMPLE_RATE_HZ, SCANS_PER_BLOCK,
+    SampleBlock, CHANNEL_COUNT, SCANS_PER_BLOCK,
 };
 
 // Data payload (all integers little-endian) appended after 16-byte AVDQ header:
@@ -30,8 +30,9 @@ use crate::sample_block::{
 // 20: u32 source_flags (bit 0 = synthesized data)
 // 24: 100 x [i32 channel_0, i32 channel_1] = 800 bytes
 pub const DATA_METADATA_LEN: usize = 24;
-pub const DATA_PAYLOAD_LEN: usize = DATA_METADATA_LEN + RAW_SAMPLE_BYTES;
-pub const DATA_ENCODING_I32: u8 = 1;
+pub const PACKED_SAMPLE_BYTES: usize = 3;
+pub const DATA_ENCODING_I24_LE: u8 = 1;
+pub const DATA_PAYLOAD_LEN: usize = DATA_METADATA_LEN + SCANS_PER_BLOCK * CHANNEL_COUNT * PACKED_SAMPLE_BYTES;
 pub const DATA_SOURCE_SYNTHETIC: u32 = 1;
 
 #[repr(u8)]
@@ -77,6 +78,8 @@ pub enum ProtocolError {
     UnexpectedFlags,
     OversizedPayload,
     OutputTooSmall,
+    InvalidScanCount,
+    InvalidSampleValue,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,22 +150,32 @@ pub fn encode_data_payload(
     block: &SampleBlock,
     dropped_blocks: u32,
     output: &mut [u8; DATA_PAYLOAD_LEN],
-) {
+) -> Result<usize, ProtocolError> {
+    let count = block.scan_count as usize;
+    if count == 0 || count > SCANS_PER_BLOCK {
+        return Err(ProtocolError::InvalidScanCount);
+    }
     output[..8].copy_from_slice(&block.first_scan_index.to_le_bytes());
-    output[8..12].copy_from_slice(&SAMPLE_RATE_HZ.to_le_bytes());
-    output[12..14].copy_from_slice(&(SCANS_PER_BLOCK as u16).to_le_bytes());
+    output[8..12].copy_from_slice(&block.sample_rate_hz.to_le_bytes());
+    output[12..14].copy_from_slice(&block.scan_count.to_le_bytes());
     output[14] = CHANNEL_COUNT as u8;
-    output[15] = DATA_ENCODING_I32;
+    output[15] = DATA_ENCODING_I24_LE;
     output[16..20].copy_from_slice(&dropped_blocks.to_le_bytes());
     output[20..24].copy_from_slice(&DATA_SOURCE_SYNTHETIC.to_le_bytes());
 
     let mut offset = DATA_METADATA_LEN;
-    for scan in block.samples.iter() {
-        for count in scan.iter() {
-            output[offset..offset + 4].copy_from_slice(&count.to_le_bytes());
-            offset += 4;
+    for scan in block.samples[..count].iter() {
+        for &value in scan.iter() {
+            if !(-8_388_608..=8_388_607).contains(&value) {
+                return Err(ProtocolError::InvalidSampleValue);
+            }
+            let bytes = value.to_le_bytes();
+            output[offset..offset + PACKED_SAMPLE_BYTES]
+                .copy_from_slice(&bytes[..PACKED_SAMPLE_BYTES]);
+            offset += PACKED_SAMPLE_BYTES;
         }
     }
+    Ok(offset)
 }
 
 // Encode an entire AVDQ frame into caller-supplied memory (no heap)
@@ -187,25 +200,52 @@ mod tests {
     use super::*;
     use crate::sample_block::{synthetic_block, synthetic_scan};
 
+    fn decode_i24_le_for_test(bytes: &[u8]) -> i32 {
+        let raw = u32::from(bytes[0])
+            | (u32::from(bytes[1]) << 8)
+            | (u32::from(bytes[2]) << 16);
+        ((raw << 8) as i32) >> 8
+    }
+
     #[test]
-    fn fixed_data_frame_layout_and_sample_order() {
+    fn signed_24_bit_boundaries_round_trip() {
+        let values = [-8_388_608i32, -1, 0, 1, 8_388_607];
+        let expected = [
+            [0x00, 0x00, 0x80],
+            [0xff, 0xff, 0xff],
+            [0x00, 0x00, 0x00],
+            [0x01, 0x00, 0x00],
+            [0xff, 0xff, 0x7f],
+        ];
+        for (value, want) in values.into_iter().zip(expected) {
+            let bytes = value.to_le_bytes();
+            assert_eq!(bytes[..3], want);
+            assert_eq!(decode_i24_le_for_test(&want), value);
+        }
+    }
+
+    #[test]
+    fn variable_data_payload_layout() {
         assert!(DATA_PAYLOAD_LEN <= MAX_PAYLOAD_LEN);
-        assert_eq!(DATA_PAYLOAD_LEN, 824);
-        let block = synthetic_block(300);
-        let mut payload = [0u8; DATA_PAYLOAD_LEN];
-        encode_data_payload(&block, 7, &mut payload);
-        assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 300);
-        assert_eq!(u32::from_le_bytes(payload[8..12].try_into().unwrap()), 2_000);
-        assert_eq!(u16::from_le_bytes(payload[12..14].try_into().unwrap()), 100);
-        assert_eq!(payload[14], 2);
-        assert_eq!(payload[15], DATA_ENCODING_I32);
-        assert_eq!(u32::from_le_bytes(payload[16..20].try_into().unwrap()), 7);
-        assert_eq!(u32::from_le_bytes(payload[20..24].try_into().unwrap()), 1);
-        let c0 = i32::from_le_bytes(payload[24..28].try_into().unwrap());
-        let c1 = i32::from_le_bytes(payload[28..32].try_into().unwrap());
-        assert_eq!([c0, c1], synthetic_scan(300));
-        let last = DATA_METADATA_LEN + 99 * 8;
-        assert_eq!(i32::from_le_bytes(payload[last..last+4].try_into().unwrap()), synthetic_scan(399)[0]);
+        assert_eq!(DATA_PAYLOAD_LEN, 1224); // 200 * 2 * 3 + 24
+        for (scans, rate) in [(100u16, 2_000u32), (200u16, 64_000u32)] {
+            let block = synthetic_block(300, scans, rate);
+            let mut payload = [0u8; DATA_PAYLOAD_LEN];
+            let used = encode_data_payload(&block, 7, &mut payload).unwrap();
+            assert_eq!(used, DATA_METADATA_LEN + scans as usize * 2 * 3);
+            assert_eq!(u64::from_le_bytes(payload[0..8].try_into().unwrap()), 300);
+            assert_eq!(u32::from_le_bytes(payload[8..12].try_into().unwrap()), rate);
+            assert_eq!(u16::from_le_bytes(payload[12..14].try_into().unwrap()), scans);
+            assert_eq!(payload[14], 2);
+            assert_eq!(payload[15], DATA_ENCODING_I24_LE);
+            assert_eq!(u32::from_le_bytes(payload[16..20].try_into().unwrap()), 7);
+            assert_eq!(u32::from_le_bytes(payload[20..24].try_into().unwrap()), 1);
+            let ch0 = decode_i24_le_for_test(&payload[24..27]);
+            let ch1 = decode_i24_le_for_test(&payload[27..30]);
+            assert_eq!([ch0, ch1], synthetic_scan(300, rate));
+            let last = DATA_METADATA_LEN + (scans as usize - 1) * 6;
+            assert_eq!(decode_i24_le_for_test(&payload[last..last+3]), synthetic_scan(300 + scans as u64 - 1, rate)[0]);
+        }
     }
 
     #[test]

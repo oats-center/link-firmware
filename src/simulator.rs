@@ -3,31 +3,32 @@
 
 use defmt::info;
 use embassy_time::{Duration, Ticker, Timer};
-use crate::{acquisition, sample_block::{synthetic_block, SCANS_PER_BLOCK}};
+use crate::{acquisition, sample_block::{synthetic_block, SCANS_PER_BLOCK, SAMPLE_RATE_HZ}};
 
 #[embassy_executor::task]
 pub async fn simulator_task() -> ! {
     loop {
-        // Wait until the host requests START. Avoid emitting stale data when idle
         while !acquisition::is_streaming() {
             Timer::after_millis(5).await;
         }
-
-        info!("Simulator: session started at 2000 scans/sec");
         let session_id = acquisition::session_id();
+        let sample_rate_hz = SAMPLE_RATE_HZ;
+        let scan_count = SCANS_PER_BLOCK as u16; // max 200, may be smaller later
+        let interval_us = (scan_count as u64 * 1_000_000) / sample_rate_hz as u64;
+        let interval = Duration::from_micros(interval_us);
+        info!("Simulator: rate={=u32} scans/s block={=u16}", sample_rate_hz, scan_count);
         let mut first_scan: u64 = 0;
-        let mut ticker = Ticker::every(Duration::from_millis(50));
-        ticker.reset_after(Duration::from_millis(50));
+        let mut ticker = Ticker::every(interval);
+        ticker.reset_after(interval);
 
         while acquisition::is_streaming() && acquisition::session_id() == session_id {
             ticker.next().await;
             if !acquisition::is_streaming() || acquisition::session_id() != session_id {
                 break;
             }
-
-            let block = synthetic_block(first_scan);
-            // Advance regardless of queue overflow. Gaps are observable on host
-            first_scan = first_scan.wrapping_add(SCANS_PER_BLOCK as u64);
+            let block = synthetic_block(first_scan, scan_count, sample_rate_hz);
+            // Account for scheduled samples even if the network queue is full.
+            first_scan = first_scan.wrapping_add(scan_count as u64);
             if acquisition::SAMPLE_QUEUE.try_send(block).is_err() {
                 acquisition::report_drop();
             }

@@ -54,10 +54,7 @@ pub async fn tcp_server_task(stack: Stack<'static>) -> ! {
     }
 }
 
-async fn write_fully(
-    socket: &mut TcpSocket<'_>,
-    data: &[u8],
-) -> Result<(), ()> {
+async fn write_fully(socket: &mut TcpSocket<'_>, data: &[u8]) -> Result<(), ()> {
     let mut sent = 0;
 
     while sent < data.len() {
@@ -95,8 +92,8 @@ async fn send_data(
     sequence: u32,
 ) -> Result<(), ()> {
     let mut encoded = [0u8; DATA_PAYLOAD_LEN];
-    encode_data_payload(block, acquisition::dropped_blocks(), &mut encoded);
-    send_frame(socket, MessageType::Data, sequence, &encoded).await
+    let used = encode_data_payload(block, acquisition::dropped_blocks(), &mut encoded).map_err(|_| ())?;
+    send_frame(socket, MessageType::Data, sequence, &encoded[..used]).await
 }
 
 // A bounded frame parser, accepting any TCP segmentation and concatenation.
@@ -169,7 +166,7 @@ async fn handle_command(
                 acquisition::begin_session();
                 *data_sequence = 1;
                 *streaming = true;
-                // Temporary ACK; this will become a typed status in milestone 5.
+                // Temporary ACK; this will become a typed status later
                 send_frame(socket, MessageType::Status, header.sequence, SIM_STARTED).await?;
             }
         }
